@@ -598,12 +598,13 @@ void signaling_handler::update_si_status(std::shared_ptr<signaling_info>& si, s3
 		signal_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_ESTABLISHED, error_code);
 		signal_sig2_callback(si->room_id, si->member_id, SCE_NP_MATCHING2_SIGNALING_EVENT_Established, error_code);
 
-		if (si->op_activated)
+		if (si->op_activated && si->self_activated)
 			signal_ext_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_EXT_MUTUAL_ACTIVATED, CELL_OK);
 	}
 	else if ((si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_PENDING || si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_ACTIVE) && new_status == SCE_NP_SIGNALING_CONN_STATUS_INACTIVE)
 	{
 		si->conn_status = SCE_NP_SIGNALING_CONN_STATUS_INACTIVE;
+		si->self_activated = false;
 		signal_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_DEAD, error_code);
 		signal_sig2_callback(si->room_id, si->member_id, SCE_NP_MATCHING2_SIGNALING_EVENT_Dead, error_code);
 		retire_all_packets(si);
@@ -619,7 +620,7 @@ void signaling_handler::update_ext_si_status(std::shared_ptr<signaling_info>& si
 	{
 		si->op_activated = true;
 
-		if (si->conn_status != SCE_NP_SIGNALING_CONN_STATUS_ACTIVE)
+		if (si->conn_status != SCE_NP_SIGNALING_CONN_STATUS_ACTIVE || !si->self_activated)
 			signal_ext_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_EXT_PEER_ACTIVATED, CELL_OK);
 		else
 			signal_ext_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_EXT_MUTUAL_ACTIVATED, CELL_OK);
@@ -739,6 +740,7 @@ void signaling_handler::stop_sig_nl(u32 conn_id, bool forceful)
 	{
 		si->conn_status = SCE_NP_SIGNALING_CONN_STATUS_INACTIVE;
 		si->op_activated = false;
+		si->self_activated = false;
 	}
 
 	// Do not queue packets for an already dead connection
@@ -812,17 +814,28 @@ u32 signaling_handler::init_sig1(const SceNpId& npid)
 	std::lock_guard lock(data_mutex);
 
 	const u32 conn_id = get_always_conn_id(npid);
+	auto& si = ::at32(sig_peers, conn_id);
 
-	if (sig_peers[conn_id]->conn_status == SCE_NP_SIGNALING_CONN_STATUS_INACTIVE)
+	if (si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_INACTIVE)
 	{
 		sign_log.trace("Creating new sig1 connection and requesting infos from RPCN");
-		sig_peers[conn_id]->conn_status = SCE_NP_SIGNALING_CONN_STATUS_PENDING;
+		si->conn_status = SCE_NP_SIGNALING_CONN_STATUS_PENDING;
 
 		// Request peer infos from RPCN
 		auto& nph = g_fxo->get<named_thread<np::np_handler>>();
 		nph.req_sign_infos(np::npid_to_string(npid), conn_id);
 	}
+	else if (si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_ACTIVE && !si->self_activated)
+	{
+		// Already established by a Matching2 room
+		sign_log.notice("Activating connection %d already established by a room", conn_id);
+		signal_sig_callback(conn_id, SCE_NP_SIGNALING_EVENT_ESTABLISHED, CELL_OK);
 
+		if (si->op_activated)
+			signal_ext_sig_callback(conn_id, SCE_NP_SIGNALING_EVENT_EXT_MUTUAL_ACTIVATED, CELL_OK);
+	}
+
+	si->self_activated = true;
 	return conn_id;
 }
 

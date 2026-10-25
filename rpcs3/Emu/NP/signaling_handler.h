@@ -25,6 +25,8 @@ struct signaling_info
 	// Signaling
 	u32 conn_id = 0;
 	bool op_activated = false;
+	// Set by sceNpSignalingActivateConnection
+	bool self_activated = false;
 	u32 info_counter = 10;
 
 	// Matching2
